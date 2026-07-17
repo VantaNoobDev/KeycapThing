@@ -1,0 +1,16 @@
+.vscode/
+node_modules/
+Packages/
+ServerPackages/
+default.project.json/
+genRojoTree.rbxlx/
+LICENSE/
+package-lock.json/
+package.json/
+README.md/
+rokit.toml/
+selene.toml/
+sourcemap.json/
+wally.lock/
+wally.toml/
+tools/

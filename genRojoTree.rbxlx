@@ -1,0 +1,2840 @@
+<roblox version="4">
+  <Item class="ReplicatedStorage" referent="0">
+    <Properties>
+      <string name="Name">ReplicatedStorage</string>
+    </Properties>
+    <Item class="Folder" referent="1">
+      <Properties>
+        <string name="Name">Packages</string>
+      </Properties>
+      <Item class="ModuleScript" referent="2">
+        <Properties>
+          <string name="Name">Networker</string>
+          <string name="Source"><![CDATA[return require(script.Parent._Index["leifstout_networker@0.3.1"]["networker"])
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="3">
+        <Properties>
+          <string name="Name">Promise</string>
+          <string name="Source"><![CDATA[return require(script.Parent._Index["red-blox_promise@1.1.1"]["promise"])
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="4">
+        <Properties>
+          <string name="Name">Signal</string>
+          <string name="Source"><![CDATA[return require(script.Parent._Index["sleitnick_signal@2.0.3"]["signal"])
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="5">
+        <Properties>
+          <string name="Name">Trove</string>
+          <string name="Source"><![CDATA[return require(script.Parent._Index["sleitnick_trove@1.8.0"]["trove"])
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="Folder" referent="6">
+        <Properties>
+          <string name="Name">_Index</string>
+        </Properties>
+        <Item class="Folder" referent="7">
+          <Properties>
+            <string name="Name">leifstout_networker@0.3.1</string>
+          </Properties>
+          <Item class="ModuleScript" referent="8">
+            <Properties>
+              <string name="Name">Signal</string>
+              <string name="Source"><![CDATA[return require(script.Parent.Parent["sleitnick_signal@2.0.3"]["signal"])
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="9">
+            <Properties>
+              <string name="Name">networker</string>
+              <string name="Source"><![CDATA[local server = require(script.NetworkerServer)
+local client = require(script.NetworkerClient)
+
+export type Server = server.NetworkerServer
+export type Client = client.NetworkerClient
+
+return {
+	server = server,
+	client = client,
+}
+]]></string>
+            </Properties>
+            <Item class="ModuleScript" referent="10">
+              <Properties>
+                <string name="Name">NetworkerClient</string>
+                <string name="Source"><![CDATA[--!strict
+local RunService = game:GetService("RunService")
+
+local Packages = script.Parent.Parent
+local Signal = require(Packages.Signal)
+local NetworkerUtils = require(script.Parent.NetworkerUtils)
+
+type NetworkTag = NetworkerUtils.NetworkTag
+type RemotesContainer = NetworkerUtils.RemotesContainer
+
+--[=[
+	NetworkerClient facilitates the communication of client-sided networking and handles server networking instructions  
+	@class NetworkerClient  
+]=]
+local NetworkerClient = {}
+NetworkerClient.__index = NetworkerClient
+
+export type NetworkerClient = typeof(setmetatable(
+	{} :: {
+		networkTag: NetworkTag,
+		remotes: RemotesContainer,
+		instanceConn: RBXScriptConnection?,
+		changedSignals: { [string]: Signal.Signal<any> },
+	},
+	NetworkerClient
+))
+
+--[=[
+	Constructs a new NetworkerClient  
+	@param networkTag NetworkTag -- The unqiue tag of the networker  
+	@param module {} -- The class or service the networker will be communicating with  
+	@return NetworkerClient  
+]=]
+function NetworkerClient.new(networkTag: NetworkTag, module: {}): NetworkerClient
+	assert(RunService:IsClient(), "NetworkerClient can only be created on the client")
+
+	local self = {
+		networkTag = networkTag,
+		changedSignals = {},
+	}
+
+	setmetatable(self, NetworkerClient)
+
+	if not RunService:IsRunning() then
+		return self :: any
+	end
+
+	if typeof(networkTag) == "Instance" then
+		local attributeTag = networkTag:GetAttribute(NetworkerUtils.INSTANCE_ATTRIBUTE) :: string?
+		if not attributeTag then
+			networkTag:GetAttributeChangedSignal(NetworkerUtils.INSTANCE_ATTRIBUTE):Wait()
+			attributeTag = networkTag:GetAttribute(NetworkerUtils.INSTANCE_ATTRIBUTE) :: string?
+		end
+
+		assert(attributeTag, "NetworkerClient instance does not have a networkTag attribute")
+		self.networkTag = attributeTag
+	end
+
+	local remotes = script.Parent:WaitForChild("_remotes"):WaitForChild(self.networkTag) :: RemotesContainer
+	self.remotes = remotes
+
+	remotes.Destroying:Once(function()
+		self:destroy()
+	end)
+
+	remotes.RemoteEvent.OnClientEvent:Connect(function(method: string, key: string, ...: any?)
+		if method == NetworkerUtils.SET_TAG then
+			module[key] = ...
+			if self.changedSignals[key] then
+				self.changedSignals[key]:Fire(module[key])
+			end
+			return
+		end
+
+		assert(module[method], "Method " .. method .. " does not exist on networkTag " .. remotes.Name)
+		module[method](module, key, ...)
+	end)
+
+	return self
+end
+
+--[=[
+	Gets the Signal for the given key. Changed signals are used to notify the client when a value has been changed on the server using the set methods.  
+	@param key string -- The key of the signal  
+	@return Signal -- Returns the Signal  
+]=]
+function NetworkerClient.getServerChangedSignal<T>(self: NetworkerClient, key: string): Signal.Signal<T>
+	if not self.changedSignals[key] then
+		self.changedSignals[key] = Signal.new()
+	end
+
+	return self.changedSignals[key]
+end
+
+--[=[
+	calls a method on the server.  
+	@param method string -- The method to fire  
+	@param ... any -- The arguments to pass to the method  
+	@return ()  
+]=]
+function NetworkerClient.fire(self: NetworkerClient, method: string, ...: any?): ()
+	if RunService:IsRunning() then
+		self.remotes.RemoteEvent:FireServer(method, ...)
+	end
+end
+
+--[=[
+	calls a method on the server, and returns its result. 
+	@param method string -- The method to fire  
+	@param ... any -- The arguments to pass to the method  
+	@return any? -- The result of the method
+	@yields
+]=]
+function NetworkerClient.fetch(self: NetworkerClient, method: string, ...: any): ...any
+	if not RunService:IsRunning() then
+		return nil
+	end
+
+	return self.remotes.RemoteFunction:InvokeServer(method, ...)
+end
+
+--[=[
+	Destroys the NetworkerClient and cleans up all connections  
+	@return ()  
+]=]
+function NetworkerClient.destroy(self: NetworkerClient): ()
+	if self.remotes then
+		self.remotes:Destroy()
+	end
+	for _, signal in self.changedSignals do
+		signal:Destroy()
+	end
+	if self.instanceConn then
+		self.instanceConn:Disconnect()
+	end
+end
+
+return NetworkerClient
+]]></string>
+              </Properties>
+            </Item>
+            <Item class="ModuleScript" referent="11">
+              <Properties>
+                <string name="Name">NetworkerServer</string>
+                <string name="Source"><![CDATA[--!strict
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+
+local NetworkerUtils = require(script.Parent.NetworkerUtils)
+
+local RemoteContainter: Folder
+if RunService:IsRunning() and RunService:IsServer() then
+	RemoteContainter = Instance.new("Folder")
+	RemoteContainter.Name = "_remotes"
+	RemoteContainter.Parent = script.Parent
+end
+
+type NetworkTag = NetworkerUtils.NetworkTag
+type ClientAccess = NetworkerUtils.ClientAccess
+type RemotesContainer = NetworkerUtils.RemotesContainer
+
+--[=[
+	NetworkerServer facilitates the communication of server-sided networking and handles client networking requests  
+	@class NetworkerServer  
+]=]
+local NetworkerServer = {}
+NetworkerServer.__index = NetworkerServer
+
+--[=[
+	@within NetworkerServer  
+	@type PlayerGroup Player | { Player }  
+]=]
+type PlayerGroup = Player | { Player }
+
+export type NetworkerServer = typeof(setmetatable(
+	{} :: {
+		networkTag: NetworkTag,
+		event: RemoteEvent,
+		func: RemoteFunction,
+		remotes: RemotesContainer,
+		instance: Instance?,
+		instanceConn: RBXScriptConnection?,
+		recipients: { Player }?,
+		_accessLookup: { [string]: { module: any, method: (...any?) -> ...any? } },
+	},
+	NetworkerServer
+))
+
+--[=[
+	Constructs a new NetworkerServer  
+	@param networkTag NetworkTag -- The unqiue tag of the networker  
+	@param module table? -- The class or service the client will be communicating with  
+	@param clientAccess ClientAccess? -- The methods that the client is allowed to call  
+	@return NetworkerServer  
+]=]
+function NetworkerServer.new(networkTag: NetworkTag, module: {}?, clientAccess: ClientAccess?): NetworkerServer
+	assert(RunService:IsServer(), "NetworkerServer can only be created on the server")
+
+	local self = setmetatable({
+		networkTag = networkTag,
+		_accessLookup = {},
+	}, NetworkerServer)
+
+	local remotes = Instance.new("Folder")
+	local event = Instance.new("RemoteEvent")
+	local func = Instance.new("RemoteFunction")
+	event.Parent = remotes
+	func.Parent = remotes
+
+	self.remotes = remotes :: RemotesContainer
+	self.event = event
+	self.func = func
+
+	if typeof(networkTag) == "Instance" then
+		local instance = networkTag :: Instance
+		assert(
+			instance:GetAttribute(NetworkerUtils.INSTANCE_ATTRIBUTE) == nil,
+			"NetworkerServer instance already has a networkTag attribute"
+		)
+
+		local newTag = HttpService:GenerateGUID(false):sub(1, 13)
+		self.instance = instance
+		self.networkTag = newTag
+		instance:SetAttribute(NetworkerUtils.INSTANCE_ATTRIBUTE, newTag)
+
+		self.instanceConn = instance.Destroying:Once(function()
+			self:destroy()
+		end)
+	end
+
+	remotes.Name = self.networkTag :: string
+	assert(RemoteContainter:FindFirstChild(remotes.Name) == nil, "NetworkerServer with the same name already exists")
+	remotes.Parent = RemoteContainter
+
+	if clientAccess then
+		assert(module, "Module must be provided if clientAccess is specified")
+		self:addClientAccess(module, clientAccess)
+	end
+
+	local function callback(player: Player, method: string, ...: any?): ...any?
+		local access = self._accessLookup[method]
+		if not access then
+			warn(method .. " does not exist or is restricted for ", networkTag)
+			return
+		end
+
+		return access.method(access.module, player, ...)
+	end
+
+	event.OnServerEvent:Connect(callback)
+	func.OnServerInvoke = callback
+
+	return self
+end
+
+--[=[
+	Adds a client access method(s) to the NetworkerServer
+	@param module any -- The class or service the client will be communicating with  
+	@param methods ClientAccess -- The methods that the client is allowed to call
+	@return ()  
+]=]
+function NetworkerServer.addClientAccess(self: NetworkerServer, module: any, methods: { any }): ()
+	local function addAccess(accessModule: any)
+		for _, method in methods do
+			for funcName, func in accessModule do
+				if func ~= method then
+					continue
+				end
+
+				assert(self._accessLookup[funcName] == nil, "Client access method already exists: " .. funcName)
+				assert(type(func) == "function", "Client access method must be a function: " .. funcName)
+
+				self._accessLookup[funcName] = {
+					module = module,
+					method = method,
+				}
+			end
+		end
+	end
+
+	addAccess(module)
+
+	local metatable = getmetatable(module)
+	local metatableModule = if metatable then metatable.__index else metatable
+	if metatableModule then
+		addAccess(metatableModule)
+	end
+end
+
+--[=[
+	Adds a player to the list of recipients  
+	@param player Player -- The player to add to the list of recipients  
+	@return ()  
+]=]
+function NetworkerServer.addRecipient(self: NetworkerServer, player: Player): ()
+	if not self.recipients then
+		self.recipients = {}
+	end
+
+	assert(self.recipients, "Recipients list is nil")
+	table.insert(self.recipients, player)
+end
+
+--[=[
+	Removes a player from the list of recipients  
+	@param player Player -- The player to remove from the list of recipients  
+	@return ()  
+]=]
+function NetworkerServer.removeRecipient(self: NetworkerServer, player: Player): ()
+	if not self.recipients then
+		return
+	end
+
+	local index = table.find(self.recipients, player)
+	if index then
+		table.remove(self.recipients, index)
+	end
+end
+
+--[=[
+	Clears the list of recipients  
+	@return ()  
+]=]
+function NetworkerServer.clearRecipients(self: NetworkerServer): ()
+	self.recipients = nil
+end
+
+--[=[
+	Fires a method to the given players  
+	@param players PlayerGroup -- The players to fire the method to  
+	@param method string -- The name of the method to fire  
+	@param ... any? -- The arguments to pass to the method  
+	@return ()  
+]=]
+function NetworkerServer.fire(self: NetworkerServer, players: PlayerGroup, method: string, ...: any?): ()
+	if typeof(players) == "Instance" then
+		self.event:FireClient(players, method, ...)
+		return
+	end
+
+	for _, player in players :: { Player } do
+		self.event:FireClient(player, method, ...)
+	end
+end
+
+--[=[
+	Fires a method to all players  
+	@param method string -- The name of the method to fire  
+	@param ... any? -- The arguments to pass to the method  
+	@return ()  
+]=]
+function NetworkerServer.fireAll(self: NetworkerServer, method: string, ...: any?): ()
+	self.event:FireAllClients(method, ...)
+end
+
+--[=[
+	Fires a method to all players except the given players  
+	@param players PlayerGroup -- The players to exclude from the firing  
+	@param method string -- The name of the method to fire  
+	@param ... any? -- The arguments to pass to the method  
+	@return ()  
+]=]
+function NetworkerServer.fireAllExcept(self: NetworkerServer, players: PlayerGroup, method: string, ...: any?): ()
+	if typeof(players) == "Instance" then
+		players = { players }
+	end
+
+	for _, player in Players:GetPlayers() do
+		if not table.find(players :: { Player }, player) then
+			self.event:FireClient(player, method, ...)
+		end
+	end
+end
+
+--[=[
+	Fires a method to the list of recipients  
+	@param method string -- The name of the method to fire  
+	@param ... any? -- The arguments to pass to the method  
+	@return ()  
+]=]
+function NetworkerServer.fireRecipients(self: NetworkerServer, method: string, ...: any?): ()
+	if not self.recipients then
+		warn("No recipients set for service ", self.networkTag)
+		return
+	end
+
+	self:fire(self.recipients, method, ...)
+end
+
+--[=[
+	Sets a value to the given players  
+	@param players PlayerGroup -- The players to set the value to  
+	@param index string -- The name of the value being set  
+	@param value any? -- The value being set  
+	@return ()  
+]=]
+function NetworkerServer.set(self: NetworkerServer, players: PlayerGroup, index: string, value: any?)
+	self:fire(players, NetworkerUtils.SET_TAG, index, value)
+end
+
+--[=[
+	Sets a value to all players  
+	@param index string -- The name of the value being set  
+	@param value any? -- The value being set  
+	@return ()  
+]=]
+function NetworkerServer.setAll(self: NetworkerServer, index: string, value: any?)
+	self:fireAll(NetworkerUtils.SET_TAG, index, value)
+end
+
+--[=[
+	Sets a value to all players except the given players  
+	@param players PlayerGroup -- The players to exclude from the setting  
+	@param index string -- The name of the value being set  
+	@param value any? -- The value being set  
+	@return ()  
+]=]
+function NetworkerServer.setAllExcept(self: NetworkerServer, players: PlayerGroup, index: string, value: any?)
+	self:fireAllExcept(players, NetworkerUtils.SET_TAG, index, value)
+end
+
+--[=[
+	Sets a value to the list of recipients  
+	@param index string -- The name of the value being set  
+	@param value any? -- The value being set  
+	@return ()  
+]=]
+function NetworkerServer.setRecipients(self: NetworkerServer, index: string, value: any?): ()
+	self:fireRecipients(NetworkerUtils.SET_TAG, index, value)
+end
+
+--[=[
+	Destroys the NetworkerServer  
+	@return ()  
+]=]
+function NetworkerServer.destroy(self: NetworkerServer): ()
+	self.remotes:Destroy()
+	self:clearRecipients()
+	if self.instanceConn then
+		self.instanceConn:Disconnect()
+	end
+	if self.instance then
+		self.instance:SetAttribute(NetworkerUtils.INSTANCE_ATTRIBUTE, nil)
+		self.instance = nil
+	end
+end
+
+return NetworkerServer
+]]></string>
+              </Properties>
+            </Item>
+            <Item class="ModuleScript" referent="12">
+              <Properties>
+                <string name="Name">NetworkerUtils</string>
+                <string name="Source"><![CDATA[--[=[
+	@type ClientAccess { (any) -> any }  
+	@within NetworkerServer  
+]=]
+export type ClientAccess = { (...any?) -> ...any? }
+
+--[=[
+	@type NetworkTag string | Instance  
+	@within NetworkerServer  
+]=]
+export type NetworkTag = string | Instance
+
+export type RemotesContainer = Folder & {
+	RemoteEvent: RemoteEvent,
+	RemoteFunction: RemoteFunction,
+}
+
+return {
+	SET_TAG = "__set",
+	INSTANCE_ATTRIBUTE = "__networkTag",
+	INSTANCE_TAG = "__instance",
+}
+]]></string>
+              </Properties>
+            </Item>
+          </Item>
+        </Item>
+        <Item class="Folder" referent="13">
+          <Properties>
+            <string name="Name">red-blox_promise@1.1.1</string>
+          </Properties>
+          <Item class="ModuleScript" referent="14">
+            <Properties>
+              <string name="Name">Spawn</string>
+              <string name="Source"><![CDATA[return require(script.Parent.Parent["red-blox_spawn@1.1.0"]["spawn"])
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="15">
+            <Properties>
+              <string name="Name">promise</string>
+              <string name="Source"><![CDATA[local Spawn = require(script.Parent.Spawn)
+
+local Promise = {}
+Promise.__index = Promise
+
+function Promise.new(Callback: (Resolve: (...any) -> (), Reject: (...any) -> ()) -> ())
+	local self = setmetatable({}, Promise)
+
+	self.Status = "Pending" :: "Pending" | "Resolved" | "Rejected"
+	self.OnResolve = {} :: { (...any) -> () }
+	self.OnReject = {} :: { (...any) -> () }
+
+	self.Value = {} :: { any }
+
+	self.Thread = coroutine.create(xpcall) :: thread?
+
+	task.spawn(self.Thread :: thread, Callback, function(Error)
+		(self :: any):_Reject(Error)
+	end, function(...)
+		(self :: any):_Resolve(...)
+	end, function(...)
+		(self :: any):_Reject(...)
+	end)
+
+	return self
+end
+
+export type Promise = typeof(Promise.new(...))
+
+function Promise.Resolve(...: any): Promise
+	local self = setmetatable({}, Promise)
+
+	self.Status = "Resolved"
+	self.OnResolve = {} :: { (...any) -> () }
+	self.OnReject = {} :: { (...any) -> () }
+	self.Value = { ... } :: { any }
+	self.Thread = nil :: thread?
+
+	return self
+end
+
+function Promise.Reject(...: any): Promise
+	local self = setmetatable({}, Promise)
+
+	self.Status = "Rejected"
+	self.OnResolve = {} :: { (...any) -> () }
+	self.OnReject = {} :: { (...any) -> () }
+	self.Value = { ... } :: { any }
+	self.Thread = nil :: thread?
+
+	return self
+end
+
+function Promise.All(PromiseList: { Promise })
+	if #PromiseList == 0 then
+		return Promise.Resolve({})
+	end
+
+	return Promise.new(function(Resolve, Reject)
+		local Finished = false
+
+		local Resolved = 0
+		local ValueList = {}
+
+		for i, Promise in PromiseList do
+			if Promise.Status == "Resolved" then
+				Resolved += 1
+				ValueList[i] = Promise.Value[1]
+			elseif Promise.Status == "Rejected" then
+				Reject(Promise.Value[1])
+				Finished = true
+				break
+			else
+				table.insert(Promise.OnResolve, function(Value)
+					if Finished then
+						return
+					end
+					
+					Resolved += 1
+					ValueList[i] = Value
+
+					if Resolved == #PromiseList then
+						Resolve(ValueList)
+						Finished = true
+					end
+				end)
+
+				table.insert(Promise.OnReject, function(Error)
+					if Finished then
+						return
+					end
+
+					Reject(Error)
+					Finished = true
+				end)
+			end
+		end
+
+		if Resolved == #PromiseList then
+			Resolve(ValueList)
+			Finished = true
+		end
+	end)
+end
+
+function Promise.AllSettled(PromiseList: { Promise })
+	if #PromiseList == 0 then
+		return Promise.Resolve({})
+	end
+
+	return Promise.new(function(Resolve, Reject)
+		local Finished = false
+
+		local Count = 0
+		local ValueList = {}
+
+		for i, Promise in PromiseList do
+			if Promise.Status == "Resolved" then
+				Count += 1
+				ValueList[i] = "Resolved"
+			elseif Promise.Status == "Rejected" then
+				Count += 1
+				ValueList[i] = "Rejected"
+			else
+				table.insert(Promise.OnResolve, function(Value)
+					if Finished then
+						return
+					end
+					
+					Count += 1
+					ValueList[i] = "Resolved"
+
+					if Count == #PromiseList then
+						Resolve(ValueList)
+						Finished = true
+					end
+				end)
+
+				table.insert(Promise.OnReject, function(Error)
+					if Finished then
+						return
+					end
+
+					Count += 1
+					ValueList[i] = "Rejected"
+
+					if Count == #PromiseList then
+						Resolve(ValueList)
+						Finished = true
+					end
+				end)
+			end
+		end
+
+		if Count == #PromiseList then
+			Resolve(ValueList)
+			Finished = true
+		end
+	end)
+end
+
+function Promise.Any(PromiseList: { Promise })
+	if #PromiseList == 0 then
+		return Promise.Reject({})
+	end
+
+	return Promise.new(function(Resolve, Reject)
+		local Finished = false
+
+		local Rejected = 0
+		local ValueList = {}
+
+		for i, Promise in PromiseList do
+			if Promise.Status == "Resolved" then
+				Resolve(Promise.Value[1])
+				Finished = true
+				break
+			elseif Promise.Status == "Rejected" then
+				Rejected += 1
+				ValueList[i] = Promise.Value[1]
+			else
+				table.insert(Promise.OnResolve, function(Value)
+					if Finished then
+						return
+					end
+					
+					Resolve(Value)
+					Finished = true
+				end)
+
+				table.insert(Promise.OnReject, function(Error)
+					if Finished then
+						return
+					end
+
+					Rejected += 1
+					ValueList[i] = Error
+
+					if Rejected == #PromiseList then
+						Reject(ValueList)
+						Finished = true
+					end
+				end)
+			end
+		end
+
+		if Rejected == #PromiseList then
+			Reject(ValueList)
+			Finished = true
+		end
+	end)
+end
+
+function Promise.Race(PromiseList: { Promise })
+	if #PromiseList == 0 then
+		return Promise.Reject("No promises to resolve.")
+	end
+
+	return Promise.new(function(Resolve, Reject)
+		local Finished = false
+
+		for _, Promise in PromiseList do
+			if Promise.Status == "Resolved" then
+				Resolve(unpack(Promise.Value))
+				Finished = true
+				break
+			elseif Promise.Status == "Rejected" then
+				Reject(unpack(Promise.Value))
+				Finished = true
+				break
+			else
+				table.insert(Promise.OnResolve, function(Value)
+					if Finished then
+						return
+					end
+					
+					Resolve(Value)
+					Finished = true
+				end)
+
+				table.insert(Promise.OnReject, function(Error)
+					if Finished then
+						return
+					end
+
+					Reject(Error)
+					Finished = true
+				end)
+			end
+		end
+	end)
+end
+
+function Promise.Retry(MaxAttempts: number, Callback: (...any) -> (...any), ...)
+	local Args = { ... }
+
+	return Promise.new(function(Resolve, Reject)
+		local Attempts = 0
+
+		while Attempts < MaxAttempts do
+			Attempts += 1
+
+			local Result = { pcall(Callback, unpack(Args)) }
+
+			if table.remove(Result, 1) then
+				Resolve(unpack(Result))
+				break
+			elseif Attempts == MaxAttempts then
+				Reject(unpack(Result))
+				break
+			end
+		end
+	end)
+end
+
+function Promise.RetryWithDelay(MaxAttempts: number, Delay: number, Callback: (...any) -> (...any), ...)
+	local Args = { ... }
+
+	return Promise.new(function(Resolve, Reject)
+		local Attempts = 0
+
+		while Attempts < MaxAttempts do
+			Attempts += 1
+
+			local Result = { pcall(Callback, unpack(Args)) }
+
+			if table.remove(Result, 1) then
+				Resolve(unpack(Result))
+				break
+			elseif Attempts == MaxAttempts then
+				Reject(unpack(Result))
+				break
+			else
+				task.wait(Delay)
+			end
+		end
+	end)
+end
+
+function Promise._Resolve(self: Promise, ...: any)
+	assert(self.Status == "Pending", "Cannot resolve a promise that is not pending.")
+
+	self.Status = "Resolved"
+	self.Value = table.pack(...)
+
+	for _, Callback in self.OnResolve do
+		Spawn(Callback, ...)
+	end
+
+	task.defer(task.cancel, self.Thread :: thread)
+end
+
+function Promise._Reject(self: Promise, ...: any)
+	assert(self.Status == "Pending", "Cannot reject a promise that is not pending.")
+
+	self.Status = "Rejected"
+	self.Value = table.pack(...)
+
+	for _, Callback in self.OnReject do
+		Spawn(Callback, ...)
+	end
+
+	task.defer(task.cancel, self.Thread :: thread)
+end
+
+function Promise.Then(self: Promise, OnResolve: ((...any) -> ...any)?, OnReject: ((...any) -> ...any)?): Promise
+	return Promise.new(function(Resolve, Reject)
+		local function PromiseResolutionProcedure(Value: Promise | any, ...: any)
+			if type(Value) == "table" and getmetatable(Value) == Promise then
+				if Value.Status == "Pending" then
+					table.insert(Value.OnResolve, Resolve)
+					table.insert(Value.OnReject, Reject)
+				elseif Value.Status == "Resolved" then
+					Resolve(unpack(Value.Value))
+				elseif Value.Status == "Rejected" then
+					Reject(unpack(Value.Value))
+				end
+			else
+				Resolve(Value, ...)
+			end
+		end
+
+		if self.Status == "Pending" then
+			if OnResolve then
+				table.insert(self.OnResolve, function(...)
+					PromiseResolutionProcedure(OnResolve(...))
+				end)
+			else
+				table.insert(self.OnResolve, PromiseResolutionProcedure)
+			end
+
+			if OnReject then
+				table.insert(self.OnReject, function(...)
+					PromiseResolutionProcedure(OnReject(...))
+				end)
+			else
+				table.insert(self.OnReject, Reject)
+			end
+		elseif self.Status == "Resolved" then
+			if OnResolve then
+				PromiseResolutionProcedure(OnResolve(unpack(self.Value)))
+			else
+				Resolve(unpack(self.Value))
+			end
+		elseif self.Status == "Rejected" then
+			if OnReject then
+				PromiseResolutionProcedure(OnReject(unpack(self.Value)))
+			else
+				Reject(unpack(self.Value))
+			end
+		end
+	end)
+end
+
+function Promise.Catch(self: Promise, OnReject: (...any) -> ()): Promise
+	return self:Then(nil, OnReject)
+end
+
+function Promise.Finally(self: Promise, Finally: ("Pending" | "Resolved" | "Rejected") -> ()): Promise
+	-- Callbacks return self because `Then` is supposed to adopt state of returned promises.
+	return self:Then(function(...)
+		Finally(self.Status :: any)
+		
+		return self
+	end, function(Error)
+		Finally(self.Status :: any)
+		
+		return self
+	end)
+end
+
+function Promise.Await(self: Promise)
+	if self.Status == "Resolved" then
+		return unpack(self.Value)
+	elseif self.Status == "Rejected" then
+		return error(unpack(self.Value))
+	else
+		local Current = coroutine.running()
+
+		local function Resume()
+			task.spawn(Current)
+		end
+
+		table.insert(self.OnResolve, Resume)
+		table.insert(self.OnReject, Resume)
+
+		coroutine.yield()
+
+		if self.Status == "Resolved" then
+			return unpack(self.Value)
+		else
+			return error(unpack(self.Value))
+		end
+	end
+end
+
+function Promise.StatusAwait(self: Promise): ("Pending" | "Resolved" | "Rejected", ...any)
+	if self.Status == "Resolved" then
+		return self.Status, unpack(self.Value)
+	elseif self.Status == "Rejected" then
+		return self.Status, unpack(self.Value)
+	else
+		local Current = coroutine.running()
+
+		local function Resume()
+			coroutine.resume(Current)
+		end
+
+		table.insert(self.OnResolve, Resume)
+		table.insert(self.OnReject, Resume)
+
+		coroutine.yield()
+
+		return self.Status :: any, unpack(self.Value)
+	end
+end
+
+return Promise
+]]></string>
+            </Properties>
+          </Item>
+        </Item>
+        <Item class="Folder" referent="16">
+          <Properties>
+            <string name="Name">red-blox_spawn@1.1.0</string>
+          </Properties>
+          <Item class="ModuleScript" referent="17">
+            <Properties>
+              <string name="Name">spawn</string>
+              <string name="Source"><![CDATA[local FreeThreads: { thread } = {}
+
+local function RunCallback(Callback, Thread, ...)
+	Callback(...)
+	table.insert(FreeThreads, Thread)
+end
+
+local function Yielder()
+	while true do
+		RunCallback(coroutine.yield())
+	end
+end
+
+return function<T...>(Callback: (T...) -> (), ...: T...)
+	local Thread
+	if #FreeThreads > 0 then
+		Thread = FreeThreads[#FreeThreads]
+		FreeThreads[#FreeThreads] = nil
+	else
+		Thread = coroutine.create(Yielder)
+		coroutine.resume(Thread)
+	end
+
+	task.spawn(Thread, Callback, Thread, ...)
+end
+]]></string>
+            </Properties>
+          </Item>
+        </Item>
+        <Item class="Folder" referent="18">
+          <Properties>
+            <string name="Name">sleitnick_signal@2.0.3</string>
+          </Properties>
+          <Item class="ModuleScript" referent="19">
+            <Properties>
+              <string name="Name">signal</string>
+              <string name="Source"><![CDATA[-- -----------------------------------------------------------------------------
+--               Batched Yield-Safe Signal Implementation                     --
+-- This is a Signal class which has effectively identical behavior to a       --
+-- normal RBXScriptSignal, with the only difference being a couple extra      --
+-- stack frames at the bottom of the stack trace when an error is thrown.     --
+-- This implementation caches runner coroutines, so the ability to yield in   --
+-- the signal handlers comes at minimal extra cost over a naive signal        --
+-- implementation that either always or never spawns a thread.                --
+--                                                                            --
+-- License:                                                                   --
+--   Licensed under the MIT license.                                          --
+--                                                                            --
+-- Authors:                                                                   --
+--   stravant - July 31st, 2021 - Created the file.                           --
+--   sleitnick - August 3rd, 2021 - Modified for Knit.                        --
+-- -----------------------------------------------------------------------------
+
+-- Signal types
+export type Connection = {
+	Disconnect: (self: Connection) -> (),
+	Destroy: (self: Connection) -> (),
+	Connected: boolean,
+}
+
+export type Signal<T...> = {
+	Fire: (self: Signal<T...>, T...) -> (),
+	FireDeferred: (self: Signal<T...>, T...) -> (),
+	Connect: (self: Signal<T...>, fn: (T...) -> ()) -> Connection,
+	Once: (self: Signal<T...>, fn: (T...) -> ()) -> Connection,
+	DisconnectAll: (self: Signal<T...>) -> (),
+	GetConnections: (self: Signal<T...>) -> { Connection },
+	Destroy: (self: Signal<T...>) -> (),
+	Wait: (self: Signal<T...>) -> T...,
+}
+
+-- The currently idle thread to run the next handler on
+local freeRunnerThread = nil
+
+-- Function which acquires the currently idle handler runner thread, runs the
+-- function fn on it, and then releases the thread, returning it to being the
+-- currently idle one.
+-- If there was a currently idle runner thread already, that's okay, that old
+-- one will just get thrown and eventually GCed.
+local function acquireRunnerThreadAndCallEventHandler(fn, ...)
+	local acquiredRunnerThread = freeRunnerThread
+	freeRunnerThread = nil
+	fn(...)
+	-- The handler finished running, this runner thread is free again.
+	freeRunnerThread = acquiredRunnerThread
+end
+
+-- Coroutine runner that we create coroutines of. The coroutine can be
+-- repeatedly resumed with functions to run followed by the argument to run
+-- them with.
+local function runEventHandlerInFreeThread(...)
+	acquireRunnerThreadAndCallEventHandler(...)
+	while true do
+		acquireRunnerThreadAndCallEventHandler(coroutine.yield())
+	end
+end
+
+--[=[
+	@within Signal
+	@interface SignalConnection
+	.Connected boolean
+	.Disconnect (SignalConnection) -> ()
+
+	Represents a connection to a signal.
+	```lua
+	local connection = signal:Connect(function() end)
+	print(connection.Connected) --> true
+	connection:Disconnect()
+	print(connection.Connected) --> false
+	```
+]=]
+
+-- Connection class
+local Connection = {}
+Connection.__index = Connection
+
+function Connection:Disconnect()
+	if not self.Connected then
+		return
+	end
+	self.Connected = false
+
+	-- Unhook the node, but DON'T clear it. That way any fire calls that are
+	-- currently sitting on this node will be able to iterate forwards off of
+	-- it, but any subsequent fire calls will not hit it, and it will be GCed
+	-- when no more fire calls are sitting on it.
+	if self._signal._handlerListHead == self then
+		self._signal._handlerListHead = self._next
+	else
+		local prev = self._signal._handlerListHead
+		while prev and prev._next ~= self do
+			prev = prev._next
+		end
+		if prev then
+			prev._next = self._next
+		end
+	end
+end
+
+Connection.Destroy = Connection.Disconnect
+
+-- Make Connection strict
+setmetatable(Connection, {
+	__index = function(_tb, key)
+		error(("Attempt to get Connection::%s (not a valid member)"):format(tostring(key)), 2)
+	end,
+	__newindex = function(_tb, key, _value)
+		error(("Attempt to set Connection::%s (not a valid member)"):format(tostring(key)), 2)
+	end,
+})
+
+--[=[
+	@within Signal
+	@type ConnectionFn (...any) -> ()
+
+	A function connected to a signal.
+]=]
+
+--[=[
+	@class Signal
+
+	A Signal is a data structure that allows events to be dispatched
+	and observed.
+
+	This implementation is a direct copy of the de facto standard, [GoodSignal](https://devforum.roblox.com/t/lua-signal-class-comparison-optimal-goodsignal-class/1387063),
+	with some added methods and typings.
+
+	For example:
+	```lua
+	local signal = Signal.new()
+
+	-- Subscribe to a signal:
+	signal:Connect(function(msg)
+		print("Got message:", msg)
+	end)
+
+	-- Dispatch an event:
+	signal:Fire("Hello world!")
+	```
+]=]
+local Signal = {}
+Signal.__index = Signal
+
+--[=[
+	Constructs a new Signal
+
+	@return Signal
+]=]
+function Signal.new<T...>(): Signal<T...>
+	local self = setmetatable({
+		_handlerListHead = false,
+		_proxyHandler = nil,
+		_yieldedThreads = nil,
+	}, Signal)
+
+	return self
+end
+
+--[=[
+	Constructs a new Signal that wraps around an RBXScriptSignal.
+
+	@param rbxScriptSignal RBXScriptSignal -- Existing RBXScriptSignal to wrap
+	@return Signal
+
+	For example:
+	```lua
+	local signal = Signal.Wrap(workspace.ChildAdded)
+	signal:Connect(function(part) print(part.Name .. " added") end)
+	Instance.new("Part").Parent = workspace
+	```
+]=]
+function Signal.Wrap<T...>(rbxScriptSignal: RBXScriptSignal): Signal<T...>
+	assert(
+		typeof(rbxScriptSignal) == "RBXScriptSignal",
+		"Argument #1 to Signal.Wrap must be a RBXScriptSignal; got " .. typeof(rbxScriptSignal)
+	)
+
+	local signal = Signal.new()
+	signal._proxyHandler = rbxScriptSignal:Connect(function(...)
+		signal:Fire(...)
+	end)
+
+	return signal
+end
+
+--[=[
+	Checks if the given object is a Signal.
+
+	@param obj any -- Object to check
+	@return boolean -- `true` if the object is a Signal.
+]=]
+function Signal.Is(obj: any): boolean
+	return type(obj) == "table" and getmetatable(obj) == Signal
+end
+
+--[=[
+	@param fn ConnectionFn
+	@return SignalConnection
+
+	Connects a function to the signal, which will be called anytime the signal is fired.
+	```lua
+	signal:Connect(function(msg, num)
+		print(msg, num)
+	end)
+
+	signal:Fire("Hello", 25)
+	```
+]=]
+function Signal:Connect(fn)
+	local connection = setmetatable({
+		Connected = true,
+		_signal = self,
+		_fn = fn,
+		_next = false,
+	}, Connection)
+
+	if self._handlerListHead then
+		connection._next = self._handlerListHead
+		self._handlerListHead = connection
+	else
+		self._handlerListHead = connection
+	end
+
+	return connection
+end
+
+--[=[
+	@deprecated v1.3.0 -- Use `Signal:Once` instead.
+	@param fn ConnectionFn
+	@return SignalConnection
+]=]
+function Signal:ConnectOnce(fn)
+	return self:Once(fn)
+end
+
+--[=[
+	@param fn ConnectionFn
+	@return SignalConnection
+
+	Connects a function to the signal, which will be called the next time the signal fires. Once
+	the connection is triggered, it will disconnect itself.
+	```lua
+	signal:Once(function(msg, num)
+		print(msg, num)
+	end)
+
+	signal:Fire("Hello", 25)
+	signal:Fire("This message will not go through", 10)
+	```
+]=]
+function Signal:Once(fn)
+	local connection
+	local done = false
+
+	connection = self:Connect(function(...)
+		if done then
+			return
+		end
+
+		done = true
+		connection:Disconnect()
+		fn(...)
+	end)
+
+	return connection
+end
+
+function Signal:GetConnections()
+	local items = {}
+
+	local item = self._handlerListHead
+	while item do
+		table.insert(items, item)
+		item = item._next
+	end
+
+	return items
+end
+
+-- Disconnect all handlers. Since we use a linked list it suffices to clear the
+-- reference to the head handler.
+--[=[
+	Disconnects all connections from the signal.
+	```lua
+	signal:DisconnectAll()
+	```
+]=]
+function Signal:DisconnectAll()
+	local item = self._handlerListHead
+	while item do
+		item.Connected = false
+		item = item._next
+	end
+	self._handlerListHead = false
+
+	local yieldedThreads = rawget(self, "_yieldedThreads")
+	if yieldedThreads then
+		for thread in yieldedThreads do
+			if coroutine.status(thread) == "suspended" then
+				warn(debug.traceback(thread, "signal disconnected; yielded thread cancelled", 2))
+				task.cancel(thread)
+			end
+		end
+		table.clear(self._yieldedThreads)
+	end
+end
+
+-- Signal:Fire(...) implemented by running the handler functions on the
+-- coRunnerThread, and any time the resulting thread yielded without returning
+-- to us, that means that it yielded to the Roblox scheduler and has been taken
+-- over by Roblox scheduling, meaning we have to make a new coroutine runner.
+--[=[
+	@param ... any
+
+	Fire the signal, which will call all of the connected functions with the given arguments.
+	```lua
+	signal:Fire("Hello")
+
+	-- Any number of arguments can be fired:
+	signal:Fire("Hello", 32, {Test = "Test"}, true)
+	```
+]=]
+function Signal:Fire(...)
+	local item = self._handlerListHead
+	while item do
+		if item.Connected then
+			if not freeRunnerThread then
+				freeRunnerThread = coroutine.create(runEventHandlerInFreeThread)
+			end
+			task.spawn(freeRunnerThread, item._fn, ...)
+		end
+		item = item._next
+	end
+end
+
+--[=[
+	@param ... any
+
+	Same as `Fire`, but uses `task.defer` internally & doesn't take advantage of thread reuse.
+	```lua
+	signal:FireDeferred("Hello")
+	```
+]=]
+function Signal:FireDeferred(...)
+	local item = self._handlerListHead
+	while item do
+		local conn = item
+		task.defer(function(...)
+			if conn.Connected then
+				conn._fn(...)
+			end
+		end, ...)
+		item = item._next
+	end
+end
+
+--[=[
+	@return ... any
+	@yields
+
+	Yields the current thread until the signal is fired, and returns the arguments fired from the signal.
+	Yielding the current thread is not always desirable. If the desire is to only capture the next event
+	fired, using `Once` might be a better solution.
+	```lua
+	task.spawn(function()
+		local msg, num = signal:Wait()
+		print(msg, num) --> "Hello", 32
+	end)
+	signal:Fire("Hello", 32)
+	```
+]=]
+function Signal:Wait()
+	local yieldedThreads = rawget(self, "_yieldedThreads")
+	if not yieldedThreads then
+		yieldedThreads = {}
+		rawset(self, "_yieldedThreads", yieldedThreads)
+	end
+
+	local thread = coroutine.running()
+	yieldedThreads[thread] = true
+
+	self:Once(function(...)
+		yieldedThreads[thread] = nil
+
+		if coroutine.status(thread) == "suspended" then
+			task.spawn(thread, ...)
+		end
+	end)
+
+	return coroutine.yield()
+end
+
+--[=[
+	Cleans up the signal.
+
+	Technically, this is only necessary if the signal is created using
+	`Signal.Wrap`. Connections should be properly GC'd once the signal
+	is no longer referenced anywhere. However, it is still good practice
+	to include ways to strictly clean up resources. Calling `Destroy`
+	on a signal will also disconnect all connections immediately.
+	```lua
+	signal:Destroy()
+	```
+]=]
+function Signal:Destroy()
+	self:DisconnectAll()
+
+	local proxyHandler = rawget(self, "_proxyHandler")
+	if proxyHandler then
+		proxyHandler:Disconnect()
+	end
+end
+
+-- Make signal strict
+setmetatable(Signal, {
+	__index = function(_tb, key)
+		error(("Attempt to get Signal::%s (not a valid member)"):format(tostring(key)), 2)
+	end,
+	__newindex = function(_tb, key, _value)
+		error(("Attempt to set Signal::%s (not a valid member)"):format(tostring(key)), 2)
+	end,
+})
+
+return table.freeze({
+	new = Signal.new,
+	Wrap = Signal.Wrap,
+	Is = Signal.Is,
+})
+]]></string>
+            </Properties>
+            <Item class="ModuleScript" referent="20">
+              <Properties>
+                <string name="Name">init.test</string>
+                <string name="Source"><![CDATA[local ServerScriptService = game:GetService("ServerScriptService")
+
+local Test = require(ServerScriptService.TestRunner.Test)
+
+local function AwaitCondition(predicate: () -> boolean, timeout: number?)
+	local start = os.clock()
+	timeout = (timeout or 10)
+	while true do
+		if predicate() then
+			return true
+		end
+		if (os.clock() - start) > timeout then
+			return false
+		end
+		task.wait()
+	end
+end
+
+return function(ctx: Test.TestContext)
+	local Signal = require(script.Parent)
+
+	local signal
+
+	local function NumConns(sig)
+		sig = sig or signal
+		return #sig:GetConnections()
+	end
+
+	ctx:BeforeEach(function()
+		signal = Signal.new()
+	end)
+
+	ctx:AfterEach(function()
+		signal:Destroy()
+	end)
+
+	ctx:Describe("Constructor", function()
+		ctx:Test("should create a new signal and fire it", function()
+			ctx:Expect(Signal.Is(signal)):ToBe(true)
+			task.defer(function()
+				signal:Fire(10, 20)
+			end)
+			local n1, n2 = signal:Wait()
+			ctx:Expect(n1):ToBe(10)
+			ctx:Expect(n2):ToBe(20)
+		end)
+
+		ctx:Test("should create a proxy signal and connect to it", function()
+			local signalWrap = Signal.Wrap(game:GetService("RunService").Heartbeat)
+			ctx:Expect(Signal.Is(signalWrap)):ToBe(true)
+			local fired = false
+			signalWrap:Connect(function()
+				fired = true
+			end)
+			ctx:Expect(AwaitCondition(function()
+				return fired
+			end, 2)):ToBe(true)
+			signalWrap:Destroy()
+		end)
+	end)
+
+	ctx:Describe("FireDeferred", function()
+		ctx:Test("should be able to fire primitive argument", function()
+			local send = 10
+			local value
+			signal:Connect(function(v)
+				value = v
+			end)
+			signal:FireDeferred(send)
+			ctx:Expect(AwaitCondition(function()
+				return (send == value)
+			end, 1)):ToBe(true)
+		end)
+
+		ctx:Test("should be able to fire a reference based argument", function()
+			local send = { 10, 20 }
+			local value
+			signal:Connect(function(v)
+				value = v
+			end)
+			signal:FireDeferred(send)
+			ctx:Expect(AwaitCondition(function()
+				return (send == value)
+			end, 1)):ToBe(true)
+		end)
+	end)
+
+	ctx:Describe("Fire", function()
+		ctx:Test("should be able to fire primitive argument", function()
+			local send = 10
+			local value
+			signal:Connect(function(v)
+				value = v
+			end)
+			signal:Fire(send)
+			ctx:Expect(value):ToBe(send)
+		end)
+
+		ctx:Test("should be able to fire a reference based argument", function()
+			local send = { 10, 20 }
+			local value
+			signal:Connect(function(v)
+				value = v
+			end)
+			signal:Fire(send)
+			ctx:Expect(value):ToBe(send)
+		end)
+	end)
+
+	ctx:Describe("ConnectOnce", function()
+		ctx:Test("should only capture first fire", function()
+			local value
+			local c = signal:ConnectOnce(function(v)
+				value = v
+			end)
+			ctx:Expect(c.Connected):ToBe(true)
+			signal:Fire(10)
+			ctx:Expect(c.Connected):ToBe(false)
+			signal:Fire(20)
+			ctx:Expect(value):ToBe(10)
+		end)
+	end)
+
+	ctx:Describe("Wait", function()
+		ctx:Test("should be able to wait for a signal to fire", function()
+			task.defer(function()
+				signal:Fire(10, 20, 30)
+			end)
+			local n1, n2, n3 = signal:Wait()
+			ctx:Expect(n1):ToBe(10)
+			ctx:Expect(n2):ToBe(20)
+			ctx:Expect(n3):ToBe(30)
+		end)
+	end)
+
+	ctx:Describe("DisconnectAll", function()
+		ctx:Test("should disconnect all connections", function()
+			signal:Connect(function() end)
+			signal:Connect(function() end)
+			ctx:Expect(NumConns()):ToBe(2)
+			signal:DisconnectAll()
+			ctx:Expect(NumConns()):ToBe(0)
+		end)
+	end)
+
+	ctx:Describe("Disconnect", function()
+		ctx:Test("should disconnect connection", function()
+			local con = signal:Connect(function() end)
+			ctx:Expect(NumConns()):ToBe(1)
+			con:Disconnect()
+			ctx:Expect(NumConns()):ToBe(0)
+		end)
+
+		ctx:Test("should still work if connections disconnected while firing", function()
+			local a = 0
+			local c
+			signal:Connect(function()
+				a += 1
+			end)
+			c = signal:Connect(function()
+				c:Disconnect()
+				a += 1
+			end)
+			signal:Connect(function()
+				a += 1
+			end)
+			signal:Fire()
+			ctx:Expect(a):ToBe(3)
+		end)
+
+		ctx:Test("should still work if connections disconnected while firing deferred", function()
+			local a = 0
+			local c
+			signal:Connect(function()
+				a += 1
+			end)
+			c = signal:Connect(function()
+				c:Disconnect()
+				a += 1
+			end)
+			signal:Connect(function()
+				a += 1
+			end)
+			signal:FireDeferred()
+			ctx:Expect(AwaitCondition(function()
+				return a == 3
+			end)):ToBe(true)
+		end)
+	end)
+end
+]]></string>
+              </Properties>
+            </Item>
+            <Item class="ModuleScript" referent="21">
+              <Properties>
+                <string name="Name">wally</string>
+                <string name="Source">return {
+	package = {
+		authors = {"Stephen Leitnick"},
+		description = "Signal class",
+		exclude = {"node_modules", "package.json", "**/*.ts"},
+		license = "MIT",
+		name = "sleitnick/signal",
+		realm = "shared",
+		registry = "https://github.com/UpliftGames/wally-index",
+		version = "2.0.3",
+	},
+}</string>
+              </Properties>
+            </Item>
+          </Item>
+        </Item>
+        <Item class="Folder" referent="22">
+          <Properties>
+            <string name="Name">sleitnick_trove@1.8.0</string>
+          </Properties>
+          <Item class="ModuleScript" referent="23">
+            <Properties>
+              <string name="Name">trove</string>
+              <string name="Source"><![CDATA[--!strict
+
+local RunService = game:GetService("RunService")
+
+export type Trove = {
+	Extend: (self: Trove) -> Trove,
+	Clone: <T>(self: Trove, instance: T & Instance) -> T,
+	Construct: <T, A...>(self: Trove, class: Constructable<T, A...>, A...) -> T,
+	Connect: (
+		self: Trove,
+		signal: SignalLike | SignalLikeMetatable | RBXScriptSignal,
+		fn: (...any) -> ...any
+	) -> ConnectionLike | ConnectionLikeMetatable,
+	BindToRenderStep: (self: Trove, name: string, priority: number, fn: (dt: number) -> ()) -> (),
+	AddPromise: <T>(self: Trove, promise: (T & PromiseLike) | (T & PromiseLikeMetatable)) -> T,
+	Add: <T>(self: Trove, object: T & Trackable, cleanupMethod: string?) -> T,
+	Remove: <T>(self: Trove, object: T & Trackable) -> boolean,
+	Pop: <T>(self: Trove, object: T & Trackable) -> boolean,
+	Clean: (self: Trove) -> (),
+	WrapClean: (self: Trove) -> () -> (),
+	AttachToInstance: (self: Trove, instance: Instance) -> RBXScriptConnection,
+	Destroy: (self: Trove) -> (),
+}
+
+type TroveInternal = Trove & {
+	_objects: { any },
+	_cleaning: boolean,
+	_findAndRemoveFromObjects: (self: TroveInternal, object: any, cleanup: boolean) -> boolean,
+	_cleanupObject: (self: TroveInternal, object: any, cleanupMethod: string?) -> (),
+}
+
+--[=[
+	@within Trove
+	@type Trackable Instance | RBXScriptConnection | ConnectionLike | ConnectLikeMetatable | PromiseLike | PromiseLikeMetatable | thread | ((...any) -> ...any) | Destroyable | DestroyableMetatable | DestroyableLowercase | DestroyableLowercaseMetatable | Disconnectable | DisconnectableMetatable | DisconnectableLowercase | DisconnectableLowercaseMetatable | SignalLike | SignalLikeMetatable
+	Represents all trackable objects by Trove.
+]=]
+export type Trackable =
+	| Instance
+	| RBXScriptConnection
+	| ConnectionLike
+	| ConnectionLikeMetatable
+	| PromiseLike
+	| PromiseLikeMetatable
+	| thread
+	| ((...any) -> ...any)
+	| Destroyable
+	| DestroyableMetatable
+	| DestroyableLowercase
+	| DestroyableLowercaseMetatable
+	| Disconnectable
+	| DisconectableMetatable
+	| DisconnectableLowercase
+	| DisconnectableLowercaseMetatable
+	| SignalLike
+	| SignalLikeMetatable
+
+--[=[
+	@within Trove
+	@interface ConnectionLike
+	.Connected boolean
+	.Disconnect (self) -> ()
+]=]
+type ConnectionLike = {
+	Connected: boolean,
+	Disconnect: (self: ConnectionLike) -> (),
+}
+
+--[=[
+	@within Trove
+	@interface ConnectionLikeMetatable
+	.Connected boolean
+	.Disconnect (self) -> ()
+	@tag Metatable
+]=]
+type ConnectionLikeMetatable = typeof(setmetatable(
+	{},
+	{} :: { Connected: boolean, Disconnect: (self: ConnectionLikeMetatable) -> () }
+))
+
+--[=[
+	@within Trove
+	@interface SignalLike
+	.Connect (self, callback: (...any) -> ...any) -> ConnectionLike
+	.Once (self, callback: (...any) -> ...any) -> ConnectionLike
+]=]
+type SignalLike = {
+	Connect: (self: SignalLike, callback: (...any) -> ...any) -> ConnectionLike | ConnectionLikeMetatable,
+	Once: (self: SignalLike, callback: (...any) -> ...any) -> ConnectionLike | ConnectionLikeMetatable,
+}
+
+--[=[
+	@within Trove
+	@interface SignalLikeMetatable
+	.Connect (self, callback: (...any) -> ...any) -> ConnectionLike
+	.Once (self, callback: (...any) -> ...any) -> ConnectionLike
+	@tag Metatable
+]=]
+type SignalLikeMetatable = typeof(setmetatable(
+	{},
+	{} :: {
+		Connect: (self: SignalLikeMetatable, callback: (...any) -> ...any) -> ConnectionLike | ConnectionLikeMetatable,
+		Once: (self: SignalLikeMetatable, callback: (...any) -> ...any) -> ConnectionLike | ConnectionLikeMetatable,
+	}
+))
+
+--[=[
+	@within Trove
+	@interface PromiseLike
+	.getStatus (self) -> string
+	.finally (self, callback: (...any) -> ...any) -> PromiseLike
+	.cancel (self) -> ()
+]=]
+type PromiseLike = {
+	getStatus: (self: PromiseLike) -> string,
+	finally: (self: PromiseLike, callback: (...any) -> ...any) -> PromiseLike | PromiseLikeMetatable,
+	cancel: (self: PromiseLike) -> (),
+}
+
+--[=[
+	@within Trove
+	@interface PromiseLikeMetatable
+	.getStatus (self) -> string
+	.finally (self, callback: (...any) -> ...any) -> PromiseLike
+	.cancel (self) -> ()
+	@tag Metatable
+]=]
+type PromiseLikeMetatable = typeof(setmetatable(
+	{},
+	{} :: {
+		getStatus: (self: any) -> string,
+		finally: (self: PromiseLikeMetatable, callback: (...any) -> ...any) -> PromiseLike | PromiseLikeMetatable,
+		cancel: (self: PromiseLikeMetatable) -> (),
+	}
+))
+
+--[=[
+	@within Trove
+	@type Constructable { new: (A...) -> T } | (A...) -> T
+]=]
+type Constructable<T, A...> = { new: (A...) -> T } | (A...) -> T
+
+--[=[
+	@within Trove
+	@interface Destroyable
+	.Destroy (self) -> ()
+]=]
+type Destroyable = {
+	Destroy: (self: Destroyable) -> (),
+}
+
+--[=[
+	@within Trove
+	@interface DestroyableMetatable
+	.Destroy (self) -> ()
+	@tag Metatable
+]=]
+type DestroyableMetatable = typeof(setmetatable({}, {} :: { Destroy: (self: DestroyableMetatable) -> () }))
+
+--[=[
+	@within Trove
+	@interface DestroyableLowercase
+	.destroy (self) -> ()
+]=]
+type DestroyableLowercase = {
+	destroy: (self: DestroyableLowercase) -> (),
+}
+
+--[=[
+	@within Trove
+	@interface DestroyableLowercaseMetatable
+	.destroy (self) -> ()
+	@tag Metatable
+]=]
+type DestroyableLowercaseMetatable = typeof(setmetatable(
+	{},
+	{} :: { destroy: (self: DestroyableLowercaseMetatable) -> () }
+))
+
+--[=[
+	@within Trove
+	@interface Disconnectable
+	.Disconnect (self) -> ()
+]=]
+type Disconnectable = {
+	Disconnect: (self: Disconnectable) -> (),
+}
+
+--[=[
+	@within Trove
+	@interface DisconectableMetatable
+	.Disconnect (self) -> ()
+	@tag Metatable
+]=]
+type DisconectableMetatable = typeof(setmetatable({}, {} :: { Disconnect: (self: DisconectableMetatable) -> () }))
+
+--[=[
+	@within Trove
+	@interface DisconnectableLowercase
+	.disconnect (self) -> ()
+]=]
+type DisconnectableLowercase = {
+	disconnect: (self: DisconnectableLowercase) -> (),
+}
+
+--[=[
+	@within Trove
+	@interface DisconnectableLowercaseMetatable
+	.disconnect (self) -> ()
+	@tag Metatable
+]=]
+type DisconnectableLowercaseMetatable = typeof(setmetatable(
+	{},
+	{} :: { disconnect: (self: DisconnectableLowercaseMetatable) -> () }
+))
+
+local FN_MARKER = newproxy()
+local THREAD_MARKER = newproxy()
+local GENERIC_OBJECT_CLEANUP_METHODS = table.freeze({ "Destroy", "Disconnect", "destroy", "disconnect" })
+
+local function getObjectCleanupFunction(object: any, cleanupMethod: string?)
+	local t = typeof(object)
+
+	if t == "function" then
+		return FN_MARKER
+	elseif t == "thread" then
+		return THREAD_MARKER
+	end
+
+	if cleanupMethod then
+		return cleanupMethod
+	end
+
+	if t == "Instance" then
+		return "Destroy"
+	elseif t == "RBXScriptConnection" then
+		return "Disconnect"
+	elseif t == "table" then
+		for _, genericCleanupMethod in GENERIC_OBJECT_CLEANUP_METHODS do
+			if typeof(object[genericCleanupMethod]) == "function" then
+				return genericCleanupMethod
+			end
+		end
+	end
+
+	error(`failed to get cleanup function for object {t}: {object}`, 3)
+end
+
+local function assertPromiseLike(object: any)
+	if
+		typeof(object) ~= "table"
+		or typeof(object.getStatus) ~= "function"
+		or typeof(object.finally) ~= "function"
+		or typeof(object.cancel) ~= "function"
+	then
+		error("did not receive a promise as an argument", 3)
+	end
+end
+
+local function assertSignalLike(object: any)
+	if
+		typeof(object) ~= "RBXScriptSignal"
+		and (typeof(object) ~= "table" or typeof(object.Connect) ~= "function" or typeof(object.Once) ~= "function")
+	then
+		error("did not receive a signal as an argument", 3)
+	end
+end
+
+--[=[
+	@class Trove
+	A Trove is helpful for tracking any sort of object during
+	runtime that needs to get cleaned up at some point.
+]=]
+local Trove = {}
+Trove.__index = Trove
+
+--[=[
+	@return Trove
+	Constructs a Trove object.
+
+	```lua
+	local trove = Trove.new()
+	```
+]=]
+function Trove.new(): Trove
+	local self = setmetatable({}, Trove)
+
+	self._objects = {}
+	self._cleaning = false
+
+	return (self :: any) :: Trove
+end
+
+--[=[
+	@method Add
+	@within Trove
+	@param object any -- Object to track
+	@param cleanupMethod string? -- Optional cleanup name override
+	@return object: any
+	Adds an object to the trove. Once the trove is cleaned or
+	destroyed, the object will also be cleaned up.
+
+	The following types are accepted (e.g. `typeof(object)`):
+
+	| Type | Cleanup |
+	| ---- | ------- |
+	| `Instance` | `object:Destroy()` |
+	| `RBXScriptConnection` | `object:Disconnect()` |
+	| `function` | `object()` |
+	| `thread` | `task.cancel(object)` |
+	| `table` | `object:Destroy()` _or_ `object:Disconnect()` _or_ `object:destroy()` _or_ `object:disconnect()` |
+	| `table` with `cleanupMethod` | `object:<cleanupMethod>()` |
+
+	Returns the object added.
+
+	```lua
+	-- Add a part to the trove, then destroy the trove,
+	-- which will also destroy the part:
+	local part = Instance.new("Part")
+	trove:Add(part)
+	trove:Destroy()
+
+	-- Add a function to the trove:
+	trove:Add(function()
+		print("Cleanup!")
+	end)
+	trove:Destroy()
+
+	-- Standard cleanup from table:
+	local tbl = {}
+	function tbl:Destroy()
+		print("Cleanup")
+	end
+	trove:Add(tbl)
+
+	-- Custom cleanup from table:
+	local tbl = {}
+	function tbl:DoSomething()
+		print("Do something on cleanup")
+	end
+	trove:Add(tbl, "DoSomething")
+	```
+]=]
+function Trove.Add(self: TroveInternal, object: Trackable, cleanupMethod: string?): any
+	if self._cleaning then
+		error("cannot call trove:Add() while cleaning", 2)
+	end
+
+	local cleanup = getObjectCleanupFunction(object, cleanupMethod)
+	table.insert(self._objects, { object, cleanup })
+
+	return object
+end
+
+--[=[
+	@method Clone
+	@within Trove
+	@return Instance
+	Clones the given instance and adds it to the trove. Shorthand for
+	`trove:Add(instance:Clone())`.
+
+	```lua
+	local clonedPart = trove:Clone(somePart)
+	```
+]=]
+function Trove.Clone(self: TroveInternal, instance: Instance): Instance
+	if self._cleaning then
+		error("cannot call trove:Clone() while cleaning", 2)
+	end
+
+	return self:Add(instance:Clone())
+end
+
+--[=[
+	@method Construct
+	@within Trove
+	@param class { new(Args...) -> T } | (Args...) -> T
+	@param ... Args...
+	@return T
+	Constructs a new object from either the
+	table or function given.
+
+	If a table is given, the table's `new`
+	function will be called with the given
+	arguments.
+
+	If a function is given, the function will
+	be called with the given arguments.
+
+	The result from either of the two options
+	will be added to the trove.
+
+	This is shorthand for `trove:Add(SomeClass.new(...))`
+	and `trove:Add(SomeFunction(...))`.
+
+	```lua
+	local Signal = require(somewhere.Signal)
+
+	-- All of these are identical:
+	local s = trove:Construct(Signal)
+	local s = trove:Construct(Signal.new)
+	local s = trove:Construct(function() return Signal.new() end)
+	local s = trove:Add(Signal.new())
+
+	-- Even Roblox instances can be created:
+	local part = trove:Construct(Instance, "Part")
+	```
+]=]
+function Trove.Construct<T, A...>(self: TroveInternal, class: Constructable<T, A...>, ...: A...)
+	if self._cleaning then
+		error("Cannot call trove:Construct() while cleaning", 2)
+	end
+
+	local object = nil
+	local t = type(class)
+	if t == "table" then
+		object = (class :: any).new(...)
+	elseif t == "function" then
+		object = (class :: any)(...)
+	end
+
+	return self:Add(object)
+end
+
+--[=[
+	@method Connect
+	@within Trove
+	@param signal RBXScriptSignal
+	@param fn (...: any) -> ()
+	@return RBXScriptConnection
+	Connects the function to the signal, adds the connection
+	to the trove, and then returns the connection.
+
+	This is shorthand for `trove:Add(signal:Connect(fn))`.
+
+	```lua
+	trove:Connect(workspace.ChildAdded, function(instance)
+		print(instance.Name .. " added to workspace")
+	end)
+	```
+]=]
+function Trove.Connect(
+	self: TroveInternal,
+	signal: SignalLike | SignalLikeMetatable | RBXScriptSignal,
+	fn: (...any) -> ...any
+)
+	if self._cleaning then
+		error("Cannot call trove:Connect() while cleaning", 2)
+	end
+	assertSignalLike(signal)
+
+	local confirmedSignal = signal :: SignalLike
+
+	return self:Add(confirmedSignal:Connect(fn))
+end
+
+--[=[
+	@method Once
+	@within Trove
+	@param signal RBXScriptSignal
+	@param fn (...: any) -> ()
+	@return RBXScriptConnection
+	Connects the function to the signal using the `Once`
+	method, adds the connection to the trove, and then
+	returns the connection.
+
+	This is shorthand for `trove:Add(signal:Once(fn))`.
+
+	```lua
+	trove:Connect(workspace.ChildAdded, function(instance)
+		print(instance.Name .. " added to workspace")
+	end)
+	```
+]=]
+function Trove.Once(
+	self: TroveInternal,
+	signal: SignalLike | SignalLikeMetatable | RBXScriptSignal,
+	fn: (...any) -> ...any
+)
+	if self._cleaning then
+		error("Cannot call trove:Connect() while cleaning", 2)
+	end
+	assertSignalLike(signal)
+
+	local confirmedSignal = signal :: SignalLike
+
+	local conn
+	conn = confirmedSignal:Once(function(...)
+		fn(...)
+		self:Pop(conn)
+	end)
+
+	return self:Add(conn)
+end
+
+--[=[
+	@method BindToRenderStep
+	@within Trove
+	@param name string
+	@param priority number
+	@param fn (dt: number) -> ()
+	Calls `RunService:BindToRenderStep` and registers a function in the
+	trove that will call `RunService:UnbindFromRenderStep` on cleanup.
+
+	```lua
+	trove:BindToRenderStep("Test", Enum.RenderPriority.Last.Value, function(dt)
+		-- Do something
+	end)
+	```
+]=]
+function Trove.BindToRenderStep(self: TroveInternal, name: string, priority: number, fn: (dt: number) -> ())
+	if self._cleaning then
+		error("cannot call trove:BindToRenderStep() while cleaning", 2)
+	end
+
+	RunService:BindToRenderStep(name, priority, fn)
+
+	self:Add(function()
+		RunService:UnbindFromRenderStep(name)
+	end)
+end
+
+--[=[
+	@method AddPromise
+	@within Trove
+	@param promise Promise
+	@return Promise
+	Gives the promise to the trove, which will cancel the promise if the trove is cleaned up or if the promise
+	is removed. The exact promise is returned, thus allowing chaining.
+
+	```lua
+	trove:AddPromise(doSomethingThatReturnsAPromise())
+		:andThen(function()
+			print("Done")
+		end)
+	-- Will cancel the above promise (assuming it didn't resolve immediately)
+	trove:Clean()
+
+	local p = trove:AddPromise(doSomethingThatReturnsAPromise())
+	-- Will also cancel the promise
+	trove:Remove(p)
+	```
+
+	:::caution Promise v4 Only
+	This is only compatible with the [roblox-lua-promise](https://eryn.io/roblox-lua-promise/) library, version 4.
+	:::
+]=]
+function Trove.AddPromise(self: TroveInternal, promise: PromiseLike | PromiseLikeMetatable)
+	if self._cleaning then
+		error("cannot call trove:AddPromise() while cleaning", 2)
+	end
+	assertPromiseLike(promise)
+	local confirmedPromise = promise :: PromiseLike
+
+	if confirmedPromise:getStatus() == "Started" then
+		confirmedPromise:finally(function()
+			if self._cleaning then
+				return
+			end
+			self:_findAndRemoveFromObjects(confirmedPromise, false)
+		end)
+
+		self:Add(confirmedPromise, "cancel")
+	end
+
+	return confirmedPromise
+end
+
+--[=[
+	@method Remove
+	@within Trove
+	@param object any
+	Removes the object from the Trove and cleans it up. To remove without
+	cleaning, use the `Pop` method instead.
+
+	```lua
+	local part = Instance.new("Part")
+	trove:Add(part)
+	trove:Remove(part) -- Part is destroyed
+	```
+]=]
+function Trove.Remove(self: TroveInternal, object: Trackable): boolean
+	if self._cleaning then
+		error("cannot call trove:Remove() while cleaning", 2)
+	end
+
+	return self:_findAndRemoveFromObjects(object, true)
+end
+
+--[=[
+	@method Pop
+	@within Trove
+	@param object any
+	Removes the object from the Trove, but does _not_ clean it up. To
+	clean up the object on removal, use the `Remove` method instead.
+
+	```lua
+	local part = Instance.new("Part")
+	trove:Add(part)
+	trove:Pop(part)
+	trove:Clean() -- Part is NOT destroyed
+	```
+]=]
+function Trove.Pop(self: TroveInternal, object: Trackable): boolean
+	if self._cleaning then
+		error("cannot call trove:Pop() while cleaning", 2)
+	end
+
+	return self:_findAndRemoveFromObjects(object, false)
+end
+
+--[=[
+	@method Extend
+	@within Trove
+	@return Trove
+	Creates and adds another trove to itself. This is just shorthand
+	for `trove:Construct(Trove)`. This is useful for contexts where
+	the trove object is present, but the class itself isn't.
+
+	:::note
+	This does _not_ clone the trove. In other words, the objects in the
+	trove are not given to the new constructed trove. This is simply to
+	construct a new Trove and add it as an object to track.
+	:::
+
+	```lua
+	local trove = Trove.new()
+	local subTrove = trove:Extend()
+
+	trove:Clean() -- Cleans up the subTrove too
+	```
+]=]
+function Trove.Extend(self: TroveInternal)
+	if self._cleaning then
+		error("cannot call trove:Extend() while cleaning", 2)
+	end
+
+	return self:Construct(Trove)
+end
+
+--[=[
+	@method Clean
+	@within Trove
+	Cleans up all objects in the trove. This is
+	similar to calling `Remove` on each object
+	within the trove. The ordering of the objects
+	removed is _not_ guaranteed.
+
+	```lua
+	trove:Clean()
+	```
+]=]
+function Trove.Clean(self: TroveInternal)
+	if self._cleaning then
+		return
+	end
+
+	self._cleaning = true
+
+	for _, obj in self._objects do
+		self:_cleanupObject(obj[1], obj[2])
+	end
+
+	table.clear(self._objects)
+	self._cleaning = false
+end
+
+--[=[
+	@method WrapClean
+	@within Trove
+	Returns a function that wraps the trove's `Clean()`
+	method. Calling the returned function will clean up
+	the trove.
+
+	This is often useful in contexts where functions
+	are the primary mode for cleaning up an environment,
+	such as in many "observer" patterns.
+
+	```lua
+	local cleanup = trove:WrapClean()
+
+	-- Sometime later...
+	cleanup()
+	```
+
+	```lua
+	-- Common observer pattern example:
+	someObserver(function()
+		local trove = Trove.new()
+		-- Foo
+		return trove:WrapClean()
+	end)
+	```
+]=]
+function Trove.WrapClean(self: TroveInternal)
+	return function()
+		self:Clean()
+	end
+end
+
+function Trove._findAndRemoveFromObjects(self: TroveInternal, object: any, cleanup: boolean): boolean
+	local objects = self._objects
+
+	for i, obj in objects do
+		if obj[1] == object then
+			local n = #objects
+			objects[i] = objects[n]
+			objects[n] = nil
+
+			if cleanup then
+				self:_cleanupObject(obj[1], obj[2])
+			end
+
+			return true
+		end
+	end
+
+	return false
+end
+
+function Trove._cleanupObject(_self: TroveInternal, object: any, cleanupMethod: string?)
+	if cleanupMethod == FN_MARKER then
+		task.spawn(object)
+	elseif cleanupMethod == THREAD_MARKER then
+		pcall(task.cancel, object)
+	else
+		object[cleanupMethod](object)
+	end
+end
+
+--[=[
+	@method AttachToInstance
+	@within Trove
+	@param instance Instance
+	@return RBXScriptConnection
+	Attaches the trove to a Roblox instance. Once this
+	instance is removed from the game (parent or ancestor's
+	parent set to `nil`), the trove will automatically
+	clean up.
+
+	This inverses the ownership of the Trove object, and should
+	only be used when necessary. In other words, the attached
+	instance dictates when the trove is cleaned up, rather than
+	the trove dictating the cleanup of the instance.
+
+	:::caution
+	Will throw an error if `instance` is not a descendant
+	of the game hierarchy.
+	:::
+
+	```lua
+	trove:AttachToInstance(somePart)
+	trove:Add(function()
+		print("Cleaned")
+	end)
+
+	-- Destroying the part will cause the trove to clean up, thus "Cleaned" printed:
+	somePart:Destroy()
+	```
+]=]
+function Trove.AttachToInstance(self: TroveInternal, instance: Instance)
+	if self._cleaning then
+		error("cannot call trove:AttachToInstance() while cleaning", 2)
+	elseif not instance:IsDescendantOf(game) then
+		error("instance is not a descendant of the game hierarchy", 2)
+	end
+
+	return self:Connect(instance.Destroying, function()
+		self:Destroy()
+	end)
+end
+
+--[=[
+	@method Destroy
+	@within Trove
+	Alias for `trove:Clean()`.
+
+	```lua
+	trove:Destroy()
+	```
+]=]
+function Trove.Destroy(self: TroveInternal)
+	self:Clean()
+end
+
+return {
+	new = Trove.new,
+}
+]]></string>
+            </Properties>
+            <Item class="ModuleScript" referent="24">
+              <Properties>
+                <string name="Name">init.test</string>
+                <string name="Source"><![CDATA[local ServerScriptService = game:GetService("ServerScriptService")
+
+local Test = require(ServerScriptService.TestRunner.Test)
+
+return function(ctx: Test.TestContext)
+	local Trove = require(script.Parent)
+
+	ctx:Describe("Trove", function()
+		local trove
+
+		ctx:BeforeEach(function()
+			trove = Trove.new()
+		end)
+
+		ctx:AfterEach(function()
+			if trove then
+				trove:Destroy()
+				trove = nil
+			end
+		end)
+
+		ctx:Test("should add and clean up roblox instance", function()
+			local part = Instance.new("Part")
+			part.Parent = workspace
+			trove:Add(part)
+			trove:Destroy()
+			ctx:Expect(part.Parent):ToBeNil()
+		end)
+
+		ctx:Test("should add and clean up roblox connection", function()
+			local connection = workspace.Changed:Connect(function() end)
+			trove:Add(connection)
+			trove:Destroy()
+			ctx:Expect(connection.Connected):ToBe(false)
+		end)
+
+		ctx:Test("should add and clean up a table with a destroy method", function()
+			local tbl = { Destroyed = false }
+			function tbl:Destroy()
+				self.Destroyed = true
+			end
+			trove:Add(tbl)
+			trove:Destroy()
+			ctx:Expect(tbl.Destroyed):ToBe(true)
+		end)
+
+		ctx:Test("should add and clean up a table with a disconnect method", function()
+			local tbl = { Connected = true }
+			function tbl:Disconnect()
+				self.Connected = false
+			end
+			trove:Add(tbl)
+			trove:Destroy()
+			ctx:Expect(tbl.Connected):ToBe(false)
+		end)
+
+		ctx:Test("should add and clean up a function", function()
+			local fired = false
+			trove:Add(function()
+				fired = true
+			end)
+			trove:Destroy()
+			ctx:Expect(fired):ToBe(true)
+		end)
+
+		ctx:Test("should allow a custom cleanup method", function()
+			local tbl = { Cleaned = false }
+			function tbl:Cleanup()
+				self.Cleaned = true
+			end
+			trove:Add(tbl, "Cleanup")
+			trove:Destroy()
+			ctx:Expect(tbl.Cleaned):ToBe(true)
+		end)
+
+		ctx:Test("should return the object passed to add", function()
+			local part = Instance.new("Part")
+			local part2 = trove:Add(part)
+			ctx:Expect(part):ToBe(part2)
+			trove:Destroy()
+		end)
+
+		ctx:Test("should fail to add object without proper cleanup method", function()
+			local tbl = {}
+			ctx:Expect(function()
+				trove:Add(tbl)
+			end):ToThrow()
+		end)
+
+		ctx:Test("should construct an object and add it", function()
+			local class = {}
+			class.__index = class
+			function class.new(msg)
+				local self = setmetatable({}, class)
+				self._msg = msg
+				self._destroyed = false
+				return self
+			end
+			function class:Destroy()
+				self._destroyed = true
+			end
+			local msg = "abc"
+			local obj = trove:Construct(class, msg)
+			ctx:Expect(typeof(obj)):ToBe("table")
+			ctx:Expect(getmetatable(obj)):ToBe(class)
+			ctx:Expect(obj._msg):ToBe(msg)
+			ctx:Expect(obj._destroyed):ToBe(false)
+			trove:Destroy()
+			ctx:Expect(obj._destroyed):ToBe(true)
+		end)
+
+		ctx:Test("should connect to a signal", function()
+			local connection = trove:Connect(workspace.Changed, function() end)
+			ctx:Expect(typeof(connection)):ToBe("RBXScriptConnection")
+			ctx:Expect(connection.Connected):ToBe(true)
+			trove:Destroy()
+			ctx:Expect(connection.Connected):ToBe(false)
+		end)
+
+		ctx:Test("should remove an object", function()
+			local connection = trove:Connect(workspace.Changed, function() end)
+			ctx:Expect(trove:Remove(connection)):ToBe(true)
+			ctx:Expect(connection.Connected):ToBe(false)
+		end)
+
+		ctx:Test("should not remove an object not in the trove", function()
+			local connection = workspace.Changed:Connect(function() end)
+			ctx:Expect(trove:Remove(connection)):ToBe(false)
+			ctx:Expect(connection.Connected):ToBe(true)
+			connection:Disconnect()
+		end)
+
+		ctx:Test("should attach to instance", function()
+			local part = Instance.new("Part")
+			part.Parent = workspace
+			local connection = trove:AttachToInstance(part)
+			ctx:Expect(connection.Connected):ToBe(true)
+			part:Destroy()
+			ctx:Expect(connection.Connected):ToBe(false)
+		end)
+
+		ctx:Test("should fail to attach to instance not in hierarchy", function()
+			local part = Instance.new("Part")
+			ctx:Expect(function()
+				trove:AttachToInstance(part)
+			end):ToThrow()
+		end)
+
+		ctx:Test("should extend itself", function()
+			local subTrove = trove:Extend()
+			local called = false
+			subTrove:Add(function()
+				called = true
+			end)
+			ctx:Expect(typeof(subTrove)):ToBe("table")
+			ctx:Expect(getmetatable(subTrove)):ToBe(getmetatable(trove))
+			trove:Clean()
+			ctx:Expect(called):ToBe(true)
+		end)
+
+		ctx:Test("should clone an instance", function()
+			local name = "TroveCloneTest"
+			local p1 = trove:Construct(Instance.new, "Part")
+			p1.Name = name
+			local p2 = trove:Clone(p1)
+			ctx:Expect(typeof(p2)):ToBe("Instance")
+			ctx:Expect(p2):Not():ToBe(p1)
+			ctx:Expect(p2.Name):ToBe(name)
+			ctx:Expect(p1.Name):ToBe(p2.Name)
+		end)
+
+		ctx:Test("should clean up a thread", function()
+			local co = coroutine.create(function() end)
+			trove:Add(co)
+			ctx:Expect(coroutine.status(co)):ToBe("suspended")
+			trove:Clean()
+			ctx:Expect(coroutine.status(co)):ToBe("dead")
+		end)
+
+		ctx:Test("should not allow objects added during cleanup", function()
+			local added = false
+			trove:Add(function()
+				trove:Add(function() end)
+				added = true
+			end)
+			trove:Clean()
+
+			ctx:Expect(added):ToBe(false)
+		end)
+
+		ctx:Test("should not allow objects to be removed during cleanup", function()
+			local f = function() end
+			local removed = false
+			trove:Add(f)
+			trove:Add(function()
+				trove:Remove(f)
+				removed = true
+			end)
+
+			ctx:Expect(removed):ToBe(false)
+		end)
+	end)
+end
+]]></string>
+              </Properties>
+            </Item>
+            <Item class="ModuleScript" referent="25">
+              <Properties>
+                <string name="Name">wally</string>
+                <string name="Source">return {
+	package = {
+		authors = {"Stephen Leitnick"},
+		description = "Trove class for tracking and cleaning up objects",
+		license = "MIT",
+		name = "sleitnick/trove",
+		realm = "shared",
+		registry = "https://github.com/UpliftGames/wally-index",
+		version = "1.8.0",
+	},
+}</string>
+              </Properties>
+            </Item>
+          </Item>
+        </Item>
+      </Item>
+    </Item>
+    <Item class="Folder" referent="26">
+      <Properties>
+        <string name="Name">Shared</string>
+      </Properties>
+      <Item class="Folder" referent="27">
+        <Properties>
+          <string name="Name">Classes</string>
+        </Properties>
+      </Item>
+      <Item class="Folder" referent="28">
+        <Properties>
+          <string name="Name">Modules</string>
+        </Properties>
+      </Item>
+      <Item class="Folder" referent="29">
+        <Properties>
+          <string name="Name">Services</string>
+        </Properties>
+        <Item class="Folder" referent="30">
+          <Properties>
+            <string name="Name">ExampleService</string>
+          </Properties>
+          <Item class="ModuleScript" referent="31">
+            <Properties>
+              <string name="Name">ExampleServiceClient</string>
+              <string name="Source"><![CDATA[local ExampleServiceClient = {}
+
+return ExampleServiceClient
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="32">
+            <Properties>
+              <string name="Name">ExampleServiceUtils</string>
+              <string name="Source"></string>
+            </Properties>
+          </Item>
+        </Item>
+      </Item>
+    </Item>
+    <Item class="Folder" referent="33">
+      <Properties>
+        <string name="Name">UI</string>
+      </Properties>
+    </Item>
+  </Item>
+  <Item class="ServerScriptService" referent="34">
+    <Properties>
+      <string name="Name">ServerScriptService</string>
+    </Properties>
+    <Item class="Folder" referent="35">
+      <Properties>
+        <string name="Name">Classes</string>
+      </Properties>
+    </Item>
+    <Item class="Folder" referent="36">
+      <Properties>
+        <string name="Name">Modules</string>
+      </Properties>
+    </Item>
+    <Item class="Script" referent="37">
+      <Properties>
+        <string name="Name">Server</string>
+        <token name="RunContext">0</token>
+        <string name="Source"><![CDATA[local ServerScriptService = game:GetService("ServerScriptService")
+
+local ExampleServiceServer = require(ServerScriptService.Services.ExampleService.ExampleServiceServer)
+
+ExampleServiceServer:init()
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="Folder" referent="38">
+      <Properties>
+        <string name="Name">Services</string>
+      </Properties>
+      <Item class="Folder" referent="39">
+        <Properties>
+          <string name="Name">ExampleService</string>
+        </Properties>
+        <Item class="ModuleScript" referent="40">
+          <Properties>
+            <string name="Name">ExampleServiceServer</string>
+            <string name="Source"><![CDATA[local ExampleServiceServer = {}
+
+function ExampleServiceServer.init(self: ExampleServiceServer)
+	print("hi from ExampleServiceServer!")
+end
+
+export type ExampleServiceServer = typeof(ExampleServiceServer) & {}
+
+return ExampleServiceServer
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="StarterPlayer" referent="41">
+    <Properties>
+      <string name="Name">StarterPlayer</string>
+    </Properties>
+    <Item class="StarterPlayerScripts" referent="42">
+      <Properties>
+        <string name="Name">StarterPlayerScripts</string>
+      </Properties>
+      <Item class="LocalScript" referent="43">
+        <Properties>
+          <string name="Name">Client</string>
+          <string name="Source"></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+</roblox>
