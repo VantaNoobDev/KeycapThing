@@ -2773,17 +2773,21 @@ return ExampleServiceClient
     <Properties>
       <string name="Name">ServerScriptService</string>
     </Properties>
-    <Item class="Folder" referent="35">
+	<item class="folder" referent="35">
+	  <Properties>
+	    <string name="Name">ServerPackages</string>
+	  </Properties>
+    <Item class="Folder" referent="36">
       <Properties>
         <string name="Name">Classes</string>
       </Properties>
     </Item>
-    <Item class="Folder" referent="36">
+    <Item class="Folder" referent="37">
       <Properties>
         <string name="Name">Modules</string>
       </Properties>
     </Item>
-    <Item class="Script" referent="37">
+    <Item class="Script" referent="38">
       <Properties>
         <string name="Name">Server</string>
         <token name="RunContext">0</token>
@@ -2795,15 +2799,15 @@ ExampleServiceServer:init()
 ]]></string>
       </Properties>
     </Item>
-    <Item class="Folder" referent="38">
+    <Item class="Folder" referent="39">
       <Properties>
         <string name="Name">Services</string>
       </Properties>
-      <Item class="Folder" referent="39">
+      <Item class="Folder" referent="40">
         <Properties>
           <string name="Name">ExampleService</string>
         </Properties>
-        <Item class="ModuleScript" referent="40">
+        <Item class="ModuleScript" referent="41">
           <Properties>
             <string name="Name">ExampleServiceServer</string>
             <string name="Source"><![CDATA[local ExampleServiceServer = {}
@@ -2821,15 +2825,15 @@ return ExampleServiceServer
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="41">
+  <Item class="StarterPlayer" referent="42">
     <Properties>
       <string name="Name">StarterPlayer</string>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="42">
+    <Item class="StarterPlayerScripts" referent="43">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="LocalScript" referent="43">
+      <Item class="LocalScript" referent="44">
         <Properties>
           <string name="Name">Client</string>
           <string name="Source"></string>

@@ -7,10 +7,10 @@
         "$className": "Folder",
         "Services": {
           "$className": "Folder",
-          "PartsService": {
+          "Data": {
             "$className": "Folder",
-            "PartsServiceClient": {
-              "$path": "src/services/PartsService/Client.luau"
+            "Data": {
+              "$path": "src/services/Data/Data.luau"
             }
           }
         },
@@ -38,6 +38,12 @@
           "$className": "Folder",
           "PartsServiceServer": {
             "$path": "src/services/PartsService/Server.luau"
+          }
+        },
+        "PlayerService": {
+          "$className": "Folder",
+          "PlayerServiceServer": {
+            "$path": "src/services/PlayerService/Server.luau"
           }
         }
       },
